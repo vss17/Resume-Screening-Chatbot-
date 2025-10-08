@@ -3,14 +3,16 @@ import re
 import pandas as pd
 import streamlit as st
 from PyPDF2 import PdfReader
-from sentence_transformers import SentenceTransformer, util
+import torch
+from transformers import AutoTokenizer, AutoModel
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 # ==========================
 # Helper Functions
 # ==========================
 
 def extract_text_from_pdf(uploaded_files):
-    """Extract text and key info from uploaded PDF resumes"""
     resumes_data = []
     for file in uploaded_files:
         pdf = PdfReader(file)
@@ -32,7 +34,6 @@ def extract_text_from_pdf(uploaded_files):
 
 
 def extract_skills(text):
-    """Extracts skills from text using simple keyword matching"""
     skill_keywords = [
         "python", "sql", "excel", "tableau", "power bi", "machine learning",
         "deep learning", "nlp", "pandas", "numpy", "scikit-learn",
@@ -43,7 +44,6 @@ def extract_skills(text):
 
 
 def extract_experience(text):
-    """Extracts years of experience using regex patterns"""
     exp_match = re.search(r"(\d+)\+?\s*(?:years?|yrs?)\s*(?:of)?\s*experience", text.lower())
     if exp_match:
         return exp_match.group(1) + " years"
@@ -51,20 +51,26 @@ def extract_experience(text):
         return "Not Mentioned"
 
 
-def embed_resumes(resumes_df):
-    """Generate embeddings for all resumes"""
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    embeddings = [model.encode(text, convert_to_tensor=True) for text in resumes_df['Text']]
-    return model, embeddings
+def embed_texts(texts):
+    tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+    model = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+
+    embeddings = []
+    for text in texts:
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+        with torch.no_grad():
+            outputs = model(**inputs)
+            emb = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+            embeddings.append(emb)
+    return np.vstack(embeddings)
 
 
-def search_candidates(query, resumes_df, embeddings, model, top_k=3):
-    """Find best-matching resumes based on query"""
-    query_emb = model.encode(query, convert_to_tensor=True)
-    cos_scores = util.cos_sim(query_emb, embeddings)[0]
-    top_results = cos_scores.topk(k=top_k)
+def search_candidates(query, resumes_df, embeddings):
+    query_emb = embed_texts([query])[0]
+    cos_sim = cosine_similarity([query_emb], embeddings)[0]
+    top_idx = cos_sim.argsort()[-3:][::-1]
     results = []
-    for idx in top_results.indices:
+    for idx in top_idx:
         row = resumes_df.iloc[idx]
         results.append({
             "Name": row["Name"],
@@ -72,7 +78,6 @@ def search_candidates(query, resumes_df, embeddings, model, top_k=3):
             "Experience": row["Experience"]
         })
     return results
-
 
 # ==========================
 # Streamlit UI
@@ -85,22 +90,20 @@ Upload multiple PDF resumes and query like:
 **_“Suggest me SQL developers with 3+ years of experience.”_**
 """)
 
-# Upload resumes
 uploaded_files = st.file_uploader("📂 Upload Resumes (PDF format)", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files:
     with st.spinner("Processing resumes..."):
         resumes_df = extract_text_from_pdf(uploaded_files)
-        model, embeddings = embed_resumes(resumes_df)
+        embeddings = embed_texts(resumes_df['Text'].tolist())
         st.success("✅ Resumes uploaded and processed successfully!")
 
     st.dataframe(resumes_df[["Name", "Skills", "Experience"]])
 
-    # Query Section
     query = st.text_input("💬 Enter your query:")
     if query:
         with st.spinner("Searching for the best candidates..."):
-            results = search_candidates(query, resumes_df, embeddings, model)
+            results = search_candidates(query, resumes_df, embeddings)
 
         st.subheader("🎯 Recommended Candidates:")
         if results:
@@ -116,6 +119,5 @@ if uploaded_files:
 else:
     st.info("👆 Upload PDF resumes to get started.")
 
-# Footer
 st.divider()
-st.caption("Developed by **Sai Santhosh** | Powered by **Local RAG (Sentence-Transformers)** | © 2025")
+st.caption("Developed by Sai Santhosh | Powered by RAG | © 2025")
