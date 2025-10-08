@@ -3,10 +3,6 @@ import re
 import pandas as pd
 import streamlit as st
 from PyPDF2 import PdfReader
-import torch
-from transformers import AutoTokenizer, AutoModel
-from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
 
 # ==========================
 # Helper Functions
@@ -32,7 +28,6 @@ def extract_text_from_pdf(uploaded_files):
         })
     return pd.DataFrame(resumes_data)
 
-
 def extract_skills(text):
     skill_keywords = [
         "python", "sql", "excel", "tableau", "power bi", "machine learning",
@@ -42,7 +37,6 @@ def extract_skills(text):
     found = [skill for skill in skill_keywords if re.search(rf"\b{skill}\b", text.lower())]
     return found
 
-
 def extract_experience(text):
     exp_match = re.search(r"(\d+)\+?\s*(?:years?|yrs?)\s*(?:of)?\s*experience", text.lower())
     if exp_match:
@@ -50,34 +44,19 @@ def extract_experience(text):
     else:
         return "Not Mentioned"
 
-
-def embed_texts(texts):
-    tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
-    model = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
-
-    embeddings = []
-    for text in texts:
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-        with torch.no_grad():
-            outputs = model(**inputs)
-            emb = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
-            embeddings.append(emb)
-    return np.vstack(embeddings)
-
-
-def search_candidates(query, resumes_df, embeddings):
-    query_emb = embed_texts([query])[0]
-    cos_sim = cosine_similarity([query_emb], embeddings)[0]
-    top_idx = cos_sim.argsort()[-3:][::-1]
+def search_candidates(query, df):
+    """Search resumes based on keyword matches in skills and experience"""
+    query_keywords = query.lower().split()
     results = []
-    for idx in top_idx:
-        row = resumes_df.iloc[idx]
-        results.append({
-            "Name": row["Name"],
-            "Skills": row["Skills"],
-            "Experience": row["Experience"]
-        })
-    return results
+    for _, row in df.iterrows():
+        text = f"{row['Skills']} {row['Experience']}".lower()
+        if all(k in text for k in query_keywords):
+            results.append({
+                "Name": row["Name"],
+                "Skills": row["Skills"],
+                "Experience": row["Experience"]
+            })
+    return results[:5]  # top 5 matches
 
 # ==========================
 # Streamlit UI
@@ -85,25 +64,21 @@ def search_candidates(query, resumes_df, embeddings):
 
 st.set_page_config(page_title="Resume Screening Chatbot", page_icon="🤖", layout="wide")
 st.title("🤖 Resume Screening Chatbot")
-st.markdown("""
-Upload multiple PDF resumes and query like:  
-**_“Suggest me SQL developers with 3+ years of experience.”_**
-""")
+st.markdown("Upload PDF resumes and search candidates by keywords in skills or experience.")
 
-uploaded_files = st.file_uploader("📂 Upload Resumes (PDF format)", type=["pdf"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📂 Upload Resumes (PDF)", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files:
     with st.spinner("Processing resumes..."):
         resumes_df = extract_text_from_pdf(uploaded_files)
-        embeddings = embed_texts(resumes_df['Text'].tolist())
-        st.success("✅ Resumes uploaded and processed successfully!")
+        st.success("✅ Resumes processed successfully!")
 
     st.dataframe(resumes_df[["Name", "Skills", "Experience"]])
 
-    query = st.text_input("💬 Enter your query:")
+    query = st.text_input("💬 Enter your query (e.g., 'SQL 3 years'):")
     if query:
-        with st.spinner("Searching for the best candidates..."):
-            results = search_candidates(query, resumes_df, embeddings)
+        with st.spinner("Searching for matching candidates..."):
+            results = search_candidates(query, resumes_df)
 
         st.subheader("🎯 Recommended Candidates:")
         if results:
@@ -115,9 +90,9 @@ if uploaded_files:
                 ---  
                 """)
         else:
-            st.warning("No matching candidates found for your query.")
+            st.warning("No matching candidates found.")
 else:
     st.info("👆 Upload PDF resumes to get started.")
 
 st.divider()
-st.caption("Developed by Sai Santhosh | Powered by RAG | © 2025")
+st.caption("Developed by Sai Santhosh | Powered by Keyword Search | © 2025")
